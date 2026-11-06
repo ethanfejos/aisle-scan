@@ -2895,13 +2895,26 @@ var qrcode = function() {
     return out;
   }
   const tfj = (o) => 'TFJ' + b32(JSON.stringify(o));
-  function buildPages() {   // keep each QR code small enough to scan off a phone screen
-    if (!tickets.length) { const p = []; for (let i = 0; i < items.length; i += PER_QR) p.push(payload(items.slice(i, i + PER_QR))); return p; }
-    const pages = []; let cur = { l: [], t: [] };
-    const push = (kind, v) => { const nx = { l: cur.l.slice(), t: cur.t.slice() }; nx[kind].push(v);
-      if ((cur.l.length || cur.t.length) && tfj(nx).length > 900) { pages.push(tfj(cur)); cur = { l: [], t: [] }; cur[kind].push(v); } else cur = nx; };
-    tickets.forEach((t) => push('t', t)); items.forEach((x) => push('l', [x.code, x.n]));
-    if (cur.l.length || cur.t.length) pages.push(tfj(cur));
+  // squeezed version: about half as long, so the QR code is easier for the desk scanner to read and type
+  const canZip = typeof CompressionStream === 'function';
+  function b32b(bytes) { const A = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ234567'; let bits = 0, val = 0, out = ''; for (const b of bytes) { val = (val << 8) | b; bits += 8; while (bits >= 5) { out += A[(val >>> (bits - 5)) & 31]; bits -= 5; } val &= 255; } if (bits > 0) out += A[(val << (5 - bits)) & 31]; return out; }
+  async function tfz(o) {
+    if (!canZip) return tfj(o);
+    try {
+      const cs = new CompressionStream('deflate-raw');
+      const buf = await new Response(new Blob([new TextEncoder().encode(JSON.stringify(o))]).stream().pipeThrough(cs)).arrayBuffer();
+      return 'TFZ' + b32b(new Uint8Array(buf));
+    } catch (e) { return tfj(o); }
+  }
+  async function buildPages() {   // keep each QR code small enough to scan off a phone screen
+    if (!tickets.length) { const p = []; for (let i = 0; i < items.length; i += 40) p.push(payload(items.slice(i, i + 40))); return p; }
+    const MAX = 420, pages = []; let cur = { l: [], t: [] };
+    const tick = (t) => { const c = { ...t }; delete c.id; c.i = String(t.id || '').slice(-6); return c; };
+    for (const [kind, v] of tickets.map((t) => ['t', tick(t)]).concat(items.map((x) => ['l', [x.code, x.n]]))) {
+      const nx = { l: cur.l.slice(), t: cur.t.slice() }; nx[kind].push(v);
+      if ((cur.l.length || cur.t.length) && (await tfz(nx)).length > MAX) { pages.push(await tfz(cur)); cur = { l: [], t: [] }; cur[kind].push(v); } else cur = nx;
+    }
+    if (cur.l.length || cur.t.length) pages.push(await tfz(cur));
     return pages;
   }
   function drawQR() {
@@ -2912,8 +2925,8 @@ var qrcode = function() {
     $('qrPage').textContent = 'QR ' + (qrIdx + 1) + ' of ' + qrPages.length;
     $('qrPrev').disabled = qrIdx === 0; $('qrNext').disabled = qrIdx === qrPages.length - 1;
   }
-  function openSend() {
-    qrPages = buildPages();
+  async function openSend() {
+    qrPages = await buildPages();
     qrIdx = 0; drawQR();
     const copies = items.reduce((a, x) => a + x.n, 0);
     const bits = [];
