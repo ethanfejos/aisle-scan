@@ -110,6 +110,14 @@
   .tk .t2 { font-size: 13px; color: var(--muted); }
   .chip { font-size: 11px; font-weight: 700; letter-spacing: .05em; text-transform: uppercase; color: var(--accent); }
   .err { color: var(--accent); font-size: 14px; font-weight: 500; }
+  .pblock { border: 1px solid var(--line); border-radius: 14px; background: var(--surface); padding: 12px; display: flex; flex-direction: column; gap: 10px; }
+  .pblock .ph { font-size: 13px; font-weight: 700; color: var(--muted); letter-spacing: .04em; text-transform: uppercase; }
+  .pblock input { height: 46px; padding: 0 12px; border-radius: 10px; border: 1px solid var(--line); background: var(--bg); font-size: 16px; width: 100%; }
+  .pblock .money { background: var(--bg); }
+  .pblock .money input { background: transparent; }
+  .unit { display: flex; border: 1px solid var(--line); border-radius: 10px; overflow: hidden; height: 46px; }
+  .unit button { flex: 1; border: 0; background: transparent; font-size: 15px; font-weight: 500; }
+  .unit button[aria-pressed=true] { background: var(--ink); color: var(--bg); }
 </style>
 </head>
 <body>
@@ -213,6 +221,9 @@
     </header>
     <form class="form" id="makeForm" novalidate>
       <div class="fld"><span class="lb">Ticket type</span><div class="types" id="types" role="group" aria-label="Ticket type"></div></div>
+      <div class="fld" id="fLayout" style="display:none"><span class="lb">Layout</span><div class="types" id="layouts" role="group" aria-label="Layout"></div></div>
+      <div id="fMulti" class="form" style="display:none"></div>
+      <div id="fSingle" class="form">
       <div class="fld"><label for="mName">Product</label><input id="mName" type="text" autocomplete="off" placeholder="e.g. Laundry Liquid Original"></div>
       <div class="fld"><label for="mSize">Size <span class="hint">(optional)</span></label><input id="mSize" type="text" autocomplete="off" placeholder="e.g. 2L, 150g, 10pk"></div>
       <div class="two">
@@ -232,6 +243,7 @@
         <input id="mSku" type="text" autocomplete="off" placeholder="e.g. FC0004412" aria-label="SKU">
         <div class="bcrow"><span class="code" id="mBc">Or scan the barcode and Ticket Finder fills the SKU in from the barcode list.</span>
           <button class="btn" type="button" id="mScan">Scan barcode</button><input type="file" id="mCam" accept="image/*" capture="environment" hidden aria-label="Photo of the product barcode"></div>
+      </div>
       </div>
       <div class="fld"><span class="lb">Copies</span>
         <div class="qbs">
@@ -2562,7 +2574,7 @@ var qrcode = function() {
   // tickets made on the phone: {id, y type, d product, z size, p price, m qty for, e each, s save, x details, f from, o to, k sku, b barcode, q {a4,a5,a6}}
   const TKEY = 'tf_aisle_tickets';
   let tickets = [];
-  try { tickets = JSON.parse(localStorage.getItem(TKEY) || '[]').filter((x) => x && x.d && x.p); } catch (e) { tickets = []; }
+  try { tickets = JSON.parse(localStorage.getItem(TKEY) || '[]').filter((x) => x && ((x.d && x.p) || Array.isArray(x.it))); } catch (e) { tickets = []; }
 
   // ---------- sound ----------
   let actx = null;
@@ -2641,8 +2653,9 @@ var qrcode = function() {
     $('tkCard').style.display = tickets.length ? '' : 'none';
     $('tkNote').textContent = tickets.length ? tickets.length + ' ticket' + (tickets.length === 1 ? '' : 's') : '';
     const qsTxt = (q) => { const p = ['a4', 'a5', 'a6'].filter((z) => q && +q[z]).map((z) => q[z] + '× ' + z.toUpperCase()); return p.length ? p.join(' · ') : '1× A6'; };
-    $('tkList').innerHTML = tickets.map((t, i) => '<div class="tk" data-t="' + i + '"><div class="info"><span class="chip">' + esc(t.y) + '</span><span class="t1">' + esc(t.d + (t.z ? ' ' + t.z : '')) + '</span>' +
-      '<span class="t2">' + esc((t.m ? t.m + ' for ' : '') + '$' + money(t.p) + ' · ' + qsTxt(t.q)) + '</span></div><button class="btn" data-edit>Edit</button><button class="rm" data-trm aria-label="Remove ' + esc(t.d) + '">×</button></div>').join('');
+    const tName = (t) => t.it ? t.it.filter((x) => x.d).map((x) => x.d).join(' / ') : t.d + (t.z ? ' ' + t.z : '');
+    $('tkList').innerHTML = tickets.map((t, i) => '<div class="tk" data-t="' + i + '"><div class="info"><span class="chip">' + esc(t.y) + (t.it ? ' · ' + esc(LNAME[t.l] || '') : '') + '</span><span class="t1">' + esc(tName(t)) + '</span>' +
+      '<span class="t2">' + esc((t.it ? t.it.filter((x) => x.p).map((x) => '$' + money(x.p)).join(' / ') : (t.m ? t.m + ' for ' : '') + '$' + money(t.p)) + ' · ' + qsTxt(t.q)) + '</span></div><button class="btn" data-edit>Edit</button><button class="rm" data-trm aria-label="Remove ' + esc(t.d) + '">×</button></div>').join('');
     $('list').innerHTML = prods ? items.map((x, i) =>
       '<div class="row' + (x.code === lastFresh ? ' fresh' : '') + '" data-i="' + i + '"><span class="code">' + x.code + '</span>' +
       '<div class="step"><button data-dec aria-label="One less copy of ' + x.code + '">−</button><span>' + x.n + '</span><button data-inc aria-label="One more copy of ' + x.code + '">+</button></div>' +
@@ -2664,7 +2677,7 @@ var qrcode = function() {
   $('tkList').addEventListener('click', (e) => {
     const row = e.target.closest('.tk'); if (!row) return; const i = +row.dataset.t;
     if (e.target.closest('[data-edit]')) openMake(i);
-    else if (e.target.closest('[data-trm]')) ask('Remove the ' + tickets[i].d + ' ticket?', 'Remove', () => { tickets.splice(i, 1); save(); render(); });
+    else if (e.target.closest('[data-trm]')) ask('Remove the ' + (tickets[i].d || tickets[i].y + ' list') + ' ticket?', 'Remove', () => { tickets.splice(i, 1); save(); render(); });
   });
 
   // ---------- make a ticket ----------
@@ -2676,6 +2689,37 @@ var qrcode = function() {
     { y: 'Bargain' },
   ];
   let editing = -1, curType = 'Super Deal', mBarcode = '';
+  // Bargain and Clearance come in several layouts (your editable tickets): one product, or 2 to 4 on one ticket
+  const LAYOUTS = { Bargain: ['single', 'landscape', 'list2', 'list3', 'list4'], Clearance: ['single', 'list2', 'list3', 'list4'] };
+  const LNAME = { single: 'One product', landscape: 'Landscape (2)', list2: 'List of 2', list3: 'List of 3', list4: 'List of 4' };
+  const layN = (l) => (l === 'landscape' ? 2 : /^list(\d)$/.test(l || '') ? +l.slice(4) : 1);
+  let curLayout = 'single', multi = [];   // multi: [{d, p, u, s, k}]
+  function readMulti() {
+    $('fMulti').querySelectorAll('.pblock').forEach((b, i) => {
+      const m = multi[i] || (multi[i] = { u: 'each' });
+      m.d = b.querySelector('.pD').value; m.p = b.querySelector('.pP').value;
+      const sv = b.querySelector('.pS'); if (sv) m.s = sv.value;
+      const sk = b.querySelector('.pK'); if (sk) m.k = sk.value;
+    });
+  }
+  function drawMulti() {
+    const n = layN(curLayout), save = curType === 'Clearance', sku = curLayout === 'landscape';
+    while (multi.length < n) multi.push({ u: 'each' });
+    $('fMulti').innerHTML = Array.from({ length: n }, (_, i) => { const m = multi[i];
+      return '<div class="pblock" data-p="' + i + '"><span class="ph">Product ' + (i + 1) + '</span>' +
+        '<input class="pD" type="text" autocomplete="off" placeholder="Product name and size" aria-label="Product ' + (i + 1) + ' name" value="' + esc(m.d || '') + '">' +
+        '<div class="two"><div class="money"><i>$</i><input class="pP" type="text" inputmode="decimal" autocomplete="off" placeholder="Price" aria-label="Product ' + (i + 1) + ' price" value="' + esc(m.p || '') + '"></div>' +
+        '<div class="unit" role="group" aria-label="Each or pack"><button type="button" data-u="each" aria-pressed="' + (m.u !== 'pack') + '">each</button><button type="button" data-u="pack" aria-pressed="' + (m.u === 'pack') + '">pack</button></div></div>' +
+        (save ? '<div class="money"><i>$</i><input class="pS" type="text" inputmode="decimal" autocomplete="off" placeholder="You save (optional)" aria-label="Product ' + (i + 1) + ' saving" value="' + esc(m.s || '') + '"></div>' : '') +
+        (sku ? '<input class="pK" type="text" autocomplete="off" placeholder="SKU (optional)" aria-label="Product ' + (i + 1) + ' SKU" value="' + esc(m.k || '') + '">' : '') + '</div>'; }).join('') +
+      '<span class="hint">Leave a product empty to leave that space blank.</span>';
+  }
+  $('fMulti').addEventListener('click', (e) => {
+    const u = e.target.closest('[data-u]'); if (!u) return;
+    readMulti(); const i = +u.closest('.pblock').dataset.p; multi[i].u = u.dataset.u;
+    u.parentElement.querySelectorAll('button').forEach((b) => b.setAttribute('aria-pressed', String(b === u)));
+  });
+  $('layouts').addEventListener('click', (e) => { const b = e.target.closest('[data-l]'); if (!b) return; readMulti(); curLayout = b.dataset.l; showType(); });
   function showType() {
     const T = TYPES.find((t) => t.y === curType) || TYPES[0];
     $('types').querySelectorAll('button').forEach((b) => b.setAttribute('aria-pressed', String(b.dataset.y === curType)));
@@ -2685,13 +2729,22 @@ var qrcode = function() {
     $('fExtra2').style.display = T.each || T.save ? '' : 'none';
     $('fDates').style.display = T.dates ? '' : 'none';
     document.querySelector('#fQty').parentElement.style.gridTemplateColumns = T.qty ? '1fr 1fr' : '1fr';
+    const L = LAYOUTS[curType];
+    if (!L || !L.includes(curLayout)) curLayout = 'single';
+    $('fLayout').style.display = L ? '' : 'none';
+    $('layouts').innerHTML = (L || []).map((l) => '<button type="button" data-l="' + l + '" aria-pressed="' + (l === curLayout) + '">' + LNAME[l] + '</button>').join('');
+    const many = layN(curLayout) > 1;
+    $('fSingle').style.display = many ? 'none' : ''; $('fMulti').style.display = many ? '' : 'none';
+    if (many) drawMulti();
   }
   $('types').innerHTML = TYPES.map((t) => '<button type="button" data-y="' + t.y + '" aria-pressed="false">' + t.y + '</button>').join('');
-  $('types').addEventListener('click', (e) => { const b = e.target.closest('[data-y]'); if (b) { curType = b.dataset.y; showType(); } });
+  $('types').addEventListener('click', (e) => { const b = e.target.closest('[data-y]'); if (b) { readMulti(); curType = b.dataset.y; showType(); } });
   function openMake(i) {
     editing = i == null ? -1 : i;
     const t = editing >= 0 ? tickets[editing] : { y: curType };
-    curType = t.y || 'Super Deal';
+    curType = t.y || 'Super Deal'; curLayout = t.l || 'single';
+    multi = Array.isArray(t.it) ? t.it.map((m) => ({ ...m })) : [];
+    $('fMulti').innerHTML = '';
     $('mName').value = t.d || ''; $('mSize').value = t.z || ''; $('mQty').value = t.m || (curType === 'Multibuy' ? '2' : '');
     $('mPrice').value = t.p || ''; $('mEach').value = t.e || ''; $('mSave').value = t.s || ''; $('mDetail').value = t.x || '';
     $('mFrom').value = t.f || ''; $('mTo').value = t.o || ''; $('mSku').value = t.k || ''; mBarcode = t.b || '';
@@ -2714,6 +2767,21 @@ var qrcode = function() {
   $('makeForm').addEventListener('submit', (e) => {
     e.preventDefault();
     const T = TYPES.find((t) => t.y === curType) || TYPES[0];
+    const qq = {}; for (const z of ['a4', 'a5', 'a6']) { const n = parseInt($('q' + z).value, 10); if (n > 0) qq[z] = Math.min(99, n); }
+    if (layN(curLayout) > 1) {
+      readMulti();
+      const it = multi.slice(0, layN(curLayout)).map((x) => ({ d: (x.d || '').trim(), p: money(x.p), u: x.u === 'pack' ? 'pack' : 'each', s: money(x.s), k: (x.k || '').trim().toUpperCase() }))
+        .map((x) => { for (const k of Object.keys(x)) if (x[k] === '') delete x[k]; return x; });
+      if (!it.some((x) => x.d && x.p)) { $('mErr').textContent = 'Fill in at least one product with its price.'; return; }
+      const bad = it.findIndex((x) => (x.d && !x.p) || (!x.d && x.p));
+      if (bad >= 0) { $('mErr').textContent = 'Product ' + (bad + 1) + ' needs both a name and a price.'; return; }
+      const t = { id: editing >= 0 ? tickets[editing].id : Date.now().toString(36) + Math.random().toString(36).slice(2, 6), y: curType, l: curLayout, it: it.map((x) => (x.d ? x : {})) };
+      if (Object.keys(qq).length) t.q = qq;
+      if (editing >= 0) tickets[editing] = t; else tickets.unshift(t);
+      save(); render(); $('makeSheet').classList.remove('show');
+      setStatus('ok', (editing >= 0 ? 'Saved ' : 'Added ') + curType + ' ' + LNAME[curLayout].toLowerCase() + ' ticket. Send it to Ticket Finder when you’re done.'); beep(true);
+      return;
+    }
     const d = $('mName').value.trim(), p = money($('mPrice').value), m = $('mQty').value.replace(/\D/g, '');
     if (!d) { $('mErr').textContent = 'Type the product name.'; $('mName').focus(); return; }
     if (!p) { $('mErr').textContent = 'Type the price.'; $('mPrice').focus(); return; }
