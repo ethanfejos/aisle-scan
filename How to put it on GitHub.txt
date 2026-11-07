@@ -1,0 +1,26 @@
+Aisle scan: putting it on GitHub Pages (free)
+=============================================
+
+What to upload: everything in this folder except this text file:
+  index.html, sw.js, manifest.webmanifest, icon-180.png, icon-192.png, icon-512.png
+  and the whole "ocr" folder (the shelf-label reader; about 11 MB)
+
+FIRST TIME
+1. Sign in at github.com. Top right: + > New repository. Name it aisle-scan,
+   leave it Public, click Create repository.
+2. Click "uploading an existing file". Drag in the 6 files AND the "ocr" folder
+   (drag the folder itself so its subfolders come with it). Click Commit changes.
+3. Settings > Pages: Source "Deploy from a branch", Branch "main", "/ (root)", Save.
+   After a minute or two your link shows: https://YOUR-GITHUB-NAME.github.io/aisle-scan/
+4. On the phone open the link, then add it to the home screen
+   (iPhone: Share > Add to Home Screen. Android: menu > Install app).
+
+UPDATING (you already have it on GitHub)
+- Add file > Upload files, drag in the new files (and the "ocr" folder if it's new
+  or changed), Commit changes. Files with the same name are replaced.
+- Open the app on the phone twice with signal so it picks up the new version.
+
+READING SHELF LABELS
+- Make a ticket > Read shelf label > take a photo of the yellow label.
+- The first time, open it with signal: the phone saves the text reader for next time,
+  then it works without signal too.
