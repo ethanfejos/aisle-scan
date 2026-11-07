@@ -2654,7 +2654,7 @@ var qrcode = function() {
     $('tkNote').textContent = tickets.length ? tickets.length + ' ticket' + (tickets.length === 1 ? '' : 's') : '';
     const qsTxt = (q) => { const p = ['a4', 'a5', 'a6'].filter((z) => q && +q[z]).map((z) => q[z] + '× ' + z.toUpperCase()); return p.length ? p.join(' · ') : '1× A6'; };
     const tName = (t) => t.it ? t.it.filter((x) => x.d).map((x) => x.d).join(' / ') : t.d + (t.z ? ' ' + t.z : '');
-    $('tkList').innerHTML = tickets.map((t, i) => '<div class="tk" data-t="' + i + '"><div class="info"><span class="chip">' + esc(t.y) + (t.it ? ' · ' + esc(LNAME[t.l] || '') : '') + '</span><span class="t1">' + esc(tName(t)) + '</span>' +
+    $('tkList').innerHTML = tickets.map((t, i) => '<div class="tk" data-t="' + i + '"><div class="info"><span class="chip">' + esc(t.y) + (t.l && t.l !== 'single' ? ' · ' + esc(LNAME[t.l] || '') : '') + '</span><span class="t1">' + esc(tName(t)) + '</span>' +
       '<span class="t2">' + esc((t.it ? t.it.filter((x) => x.p).map((x) => '$' + money(x.p)).join(' / ') : (t.m ? t.m + ' for ' : '') + '$' + money(t.p)) + ' · ' + qsTxt(t.q)) + '</span></div><button class="btn" data-edit>Edit</button><button class="rm" data-trm aria-label="Remove ' + esc(t.d) + '">×</button></div>').join('');
     $('list').innerHTML = prods ? items.map((x, i) =>
       '<div class="row' + (x.code === lastFresh ? ' fresh' : '') + '" data-i="' + i + '"><span class="code">' + x.code + '</span>' +
@@ -2690,8 +2690,8 @@ var qrcode = function() {
   ];
   let editing = -1, curType = 'Super Deal', mBarcode = '';
   // Bargain and Clearance come in several layouts (your editable tickets): one product, or 2 to 4 on one ticket
-  const LAYOUTS = { Bargain: ['single', 'landscape', 'list2', 'list3', 'list4'], Clearance: ['single', 'list2', 'list3', 'list4'] };
-  const LNAME = { single: 'One product', landscape: 'Landscape (2)', list2: 'List of 2', list3: 'List of 3', list4: 'List of 4' };
+  const LAYOUTS = { Bargain: ['single', 'landscape1', 'landscape', 'list2', 'list3', 'list4'], Clearance: ['single', 'list2', 'list3', 'list4'] };
+  const LNAME = { single: 'One product', landscape1: 'Landscape (1)', landscape: 'Landscape (2)', list2: 'List of 2', list3: 'List of 3', list4: 'List of 4' };
   const layN = (l) => (l === 'landscape' ? 2 : /^list(\d)$/.test(l || '') ? +l.slice(4) : 1);
   let curLayout = 'single', multi = [];   // multi: [{d, p, u, s, k}]
   function readMulti() {
@@ -2790,6 +2790,7 @@ var qrcode = function() {
     const t = { id: editing >= 0 ? tickets[editing].id : Date.now().toString(36) + Math.random().toString(36).slice(2, 6), y: curType, d, z: $('mSize').value.trim(), p,
       m: T.qty ? m : '', e: T.each ? money($('mEach').value) : '', s: T.save ? money($('mSave').value) : '', x: $('mDetail').value.trim(),
       f: T.dates ? $('mFrom').value : '', o: T.dates ? $('mTo').value : '', k: $('mSku').value.trim().toUpperCase(), b: mBarcode, q };
+    if (curLayout !== 'single' && layN(curLayout) === 1) t.l = curLayout;
     for (const k of Object.keys(t)) if (t[k] === '' || (k === 'q' && !Object.keys(q).length)) delete t[k];
     if (editing >= 0) tickets[editing] = t; else tickets.unshift(t);
     save(); render(); $('makeSheet').classList.remove('show');
