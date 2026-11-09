@@ -110,12 +110,6 @@
   .tk .t2 { font-size: 13px; color: var(--muted); }
   .chip { font-size: 11px; font-weight: 700; letter-spacing: .05em; text-transform: uppercase; color: var(--accent); }
   .err { color: var(--accent); font-size: 14px; font-weight: 500; }
-  .selbox { display: flex; flex-direction: column; gap: 10px; }
-  .selbtn { height: 56px; display: flex; align-items: center; justify-content: center; gap: 10px; font-size: 16px; font-weight: 600; border: 1.5px dashed var(--line); background: var(--surface); }
-  .selout { display: flex; flex-direction: column; gap: 8px; padding: 10px; border-radius: 12px; background: var(--ok-bg); color: var(--ink); font-size: 14px; }
-  .selout.bad { background: var(--accent-bg); color: var(--accent); }
-  .selout img { width: 100%; border-radius: 6px; display: block; }
-  .selout[hidden] { display: none; }
   .pblock { border: 1px solid var(--line); border-radius: 14px; background: var(--surface); padding: 12px; display: flex; flex-direction: column; gap: 10px; }
   .pblock .ph { font-size: 13px; font-weight: 700; color: var(--muted); letter-spacing: .04em; text-transform: uppercase; }
   .pblock input { height: 46px; padding: 0 12px; border-radius: 10px; border: 1px solid var(--line); background: var(--bg); font-size: 16px; width: 100%; }
@@ -226,14 +220,6 @@
       <button class="btn ghost" id="makeClose" type="button" style="margin-left:auto">Cancel</button>
     </header>
     <form class="form" id="makeForm" novalidate>
-      <div class="selbox">
-        <button class="btn selbtn" type="button" id="selBtn">
-          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 7V5a2 2 0 0 1 2-2h2M17 3h2a2 2 0 0 1 2 2v2M21 17v2a2 2 0 0 1-2 2h-2M7 21H5a2 2 0 0 1-2-2v-2"/><path d="M7 9h6M7 13h10M7 17h4"/></svg>
-          Read shelf label
-        </button>
-        <input type="file" id="selCam" accept="image/*" capture="environment" hidden aria-label="Photo of the shelf label">
-        <div class="selout" id="selOut" hidden><img id="selImg" alt="The shelf label as read"><span id="selMsg"></span></div>
-      </div>
       <div class="fld"><span class="lb">Ticket type</span><div class="types" id="types" role="group" aria-label="Ticket type"></div></div>
       <div class="fld" id="fLayout" style="display:none"><span class="lb">Layout</span><div class="types" id="layouts" role="group" aria-label="Layout"></div></div>
       <div id="fMulti" class="form" style="display:none"></div>
@@ -2579,258 +2565,6 @@ var qrcode = function() {
     return qrcode;
 }));
 </script>
-<script>// Read a Crackerjack shelf-edge label (yellow SEL) from a photo: barcode, SKU ("SC: FC0000501"), name, size, price.
-// Everything runs on the phone: ZXing for the barcode, Tesseract (files in ./ocr) for the text.
-(function (root) {
-  const Z = () => root.ZXing;
-  let workerP = null;
-  function ocrWorker(onStatus) {
-    if (workerP) return workerP;
-    workerP = (async () => {
-      onStatus && onStatus('Getting the text reader ready (first time only)…');
-      const w = await root.Tesseract.createWorker('eng', 1, {
-        workerPath: './ocr/worker.min.js', corePath: './ocr/core', langPath: './ocr/lang', gzip: true,
-        workerBlobURL: false, cacheMethod: 'none',
-      });
-      await w.setParameters({ tessedit_pageseg_mode: '11', preserve_interword_spaces: '1' });
-      return w;
-    })();
-    workerP.catch(() => { workerP = null; });
-    return workerP;
-  }
-  async function loadImage(file) {
-    if (file instanceof HTMLImageElement || file instanceof HTMLCanvasElement) return file;
-    if (root.createImageBitmap) { try { return await createImageBitmap(file, { imageOrientation: 'from-image' }); } catch (e) {} }
-    return await new Promise((res, rej) => { const im = new Image(); im.onload = () => res(im); im.onerror = rej; im.src = URL.createObjectURL(file); });
-  }
-  const W = (im) => im.width || im.naturalWidth, H = (im) => im.height || im.naturalHeight;
-
-  // 1. find the yellow label(s): a small copy, yellow mask, connected pieces, then each piece's angle
-  function findLabels(img) {
-    const k = 700 / Math.max(W(img), H(img)), w = Math.round(W(img) * k), h = Math.round(H(img) * k);
-    const cv = document.createElement('canvas'); cv.width = w; cv.height = h;
-    const x = cv.getContext('2d', { willReadFrequently: true }); x.drawImage(img, 0, 0, w, h);
-    const d = x.getImageData(0, 0, w, h).data, m = new Uint8Array(w * h);
-    for (let i = 0, p = 0; p < w * h; p++, i += 4) {
-      const r = d[i], g = d[i + 1], b = d[i + 2];
-      const hi = Math.max(r, g), lo = Math.min(r, g);
-      if (hi > 60 && lo > hi * 0.68 && lo - b > hi * 0.35) m[p] = 1;
-    }
-    const lab = new Int32Array(w * h), comps = []; let id = 0;
-    const st = new Int32Array(w * h);
-    for (let p = 0; p < w * h; p++) {
-      if (!m[p] || lab[p]) continue;
-      id++; let n = 0, top = 0; st[top++] = p; lab[p] = id;
-      let sx = 0, sy = 0, sxx = 0, syy = 0, sxy = 0;
-      while (top) {
-        const q = st[--top], qx = q % w, qy = (q / w) | 0; n++; sx += qx; sy += qy; sxx += qx * qx; syy += qy * qy; sxy += qx * qy;
-        const nb = [q - 1, q + 1, q - w, q + w];
-        for (let j = 0; j < 4; j++) { const r = nb[j]; if (r < 0 || r >= w * h) continue; if (j < 2 && ((r / w) | 0) !== qy) continue; if (m[r] && !lab[r]) { lab[r] = id; st[top++] = r; } }
-      }
-      if (n < w * h * 0.004) continue;
-      const cx = sx / n, cy = sy / n, vxx = sxx / n - cx * cx, vyy = syy / n - cy * cy, vxy = sxy / n - cx * cy;
-      comps.push({ id, n, cx, cy, ang: 0.5 * Math.atan2(2 * vxy, vxx - vyy) });
-    }
-    // extents along the label's own axes (fills in the dark text that isn't yellow)
-    for (const c of comps) {
-      const ux = Math.cos(c.ang), uy = Math.sin(c.ang); let a0 = 1e9, a1 = -1e9, b0 = 1e9, b1 = -1e9;
-      for (let p = 0; p < w * h; p++) if (lab[p] === c.id) { const px = p % w - c.cx, py = ((p / w) | 0) - c.cy, a = px * ux + py * uy, b = -px * uy + py * ux; if (a < a0) a0 = a; if (a > a1) a1 = a; if (b < b0) b0 = b; if (b > b1) b1 = b; }
-      Object.assign(c, { a0: a0 / k, a1: a1 / k, b0: b0 / k, b1: b1 / k, cx: c.cx / k, cy: c.cy / k, fill: c.n / (((a1 - a0) * (b1 - b0)) || 1) });
-    }
-    return comps.filter((c) => c.fill > 0.45 && (c.a1 - c.a0) > 1.6 * (c.b1 - c.b0))
-      .sort((a, b) => b.n - a.n);
-  }
-  // 2. cut the label out, turned flat, about 1600 px wide
-  function cutLabel(img, c, flip) {
-    const lw = c.a1 - c.a0, lh = c.b1 - c.b0, s = 1600 / lw, mx = 0.015 * lw;
-    const cv = document.createElement('canvas'); cv.width = Math.round((lw + 2 * mx) * s); cv.height = Math.round((lh + 2 * mx) * s);
-    const x = cv.getContext('2d', { willReadFrequently: true });
-    x.fillStyle = '#fff'; x.fillRect(0, 0, cv.width, cv.height);
-    x.translate(cv.width / 2, cv.height / 2); if (flip) x.rotate(Math.PI);
-    x.scale(s, s); x.rotate(-c.ang); x.translate(-(c.cx + Math.cos(c.ang) * (c.a0 + c.a1) / 2 - Math.sin(c.ang) * (c.b0 + c.b1) / 2), -(c.cy + Math.sin(c.ang) * (c.a0 + c.a1) / 2 + Math.cos(c.ang) * (c.b0 + c.b1) / 2));
-    x.drawImage(img, 0, 0);
-    return cv;
-  }
-  // grey, with the yellow turned to white, so the text stands out
-  function clean(cv) {
-    const x = cv.getContext('2d', { willReadFrequently: true }), im = x.getImageData(0, 0, cv.width, cv.height), d = im.data;
-    for (let i = 0; i < d.length; i += 4) { const v = Math.min(d[i], d[i + 1]) * 0.5 + d[i + 2] * 0.5; const g = d[i + 2] < 90 && d[i] < 110 ? Math.min(255, v) : 255 - Math.max(0, 140 - v) * 1.8; d[i] = d[i + 1] = d[i + 2] = Math.max(0, Math.min(255, d[i + 2] < 100 && d[i] < 100 ? v * 0.6 : 255)); }
-    x.putImageData(im, 0, 0); return cv;
-  }
-  function readBarcode(cv) {
-    // the barcode sits in the top-left of the label: try that area enlarged first, then the whole label
-    const tries = [];
-    const zoom = (x0, y0, x1, y1, k) => { const c = document.createElement('canvas'); c.width = Math.round((x1 - x0) * cv.width * k); c.height = Math.round((y1 - y0) * cv.height * k);
-      const g = c.getContext('2d', { willReadFrequently: true }); g.imageSmoothingQuality = 'high'; g.drawImage(cv, x0 * cv.width, y0 * cv.height, (x1 - x0) * cv.width, (y1 - y0) * cv.height, 0, 0, c.width, c.height); return { c, x0, y0, k }; };
-    tries.push(zoom(0, 0.05, 0.6, 0.55, 2), zoom(0.4, 0.45, 1, 0.95, 2), zoom(0, 0, 1, 1, 1));
-    for (const t of tries) { const r = readBarcode1(t.c); if (r) return { text: r.text, x: t.x0 * cv.width + r.x / t.k, y: t.y0 * cv.height + r.y / t.k }; }
-    return null;
-  }
-  function readBarcode1(cv) {
-    try {
-      const hints = new Map(); hints.set(Z().DecodeHintType.TRY_HARDER, true);
-      hints.set(Z().DecodeHintType.POSSIBLE_FORMATS, [Z().BarcodeFormat.EAN_13, Z().BarcodeFormat.EAN_8, Z().BarcodeFormat.UPC_A, Z().BarcodeFormat.CODE_128]);
-      const r = new (Z().MultiFormatReader)(); r.setHints(hints);
-      const res = r.decode(new (Z().BinaryBitmap)(new (Z().HybridBinarizer)(new (Z().HTMLCanvasElementLuminanceSource)(cv))));
-      const pts = res.getResultPoints() || []; const xs = pts.map((p) => p.getX()), ys = pts.map((p) => p.getY());
-      return { text: res.getText(), x: xs.reduce((a, b) => a + b, 0) / (xs.length || 1), y: ys.reduce((a, b) => a + b, 0) / (ys.length || 1) };
-    } catch (e) { return null; }
-  }
-  // dark blobs in a part of the cleaned label
-  function blobs(cv, X0, Y0, X1, Y1) {
-    const w = X1 - X0, h = Y1 - Y0, d = cv.getContext('2d', { willReadFrequently: true }).getImageData(X0, Y0, w, h).data;
-    const m = new Uint8Array(w * h); for (let p = 0, i = 0; p < w * h; p++, i += 4) if (d[i] < 110) m[p] = 1;
-    const seen = new Uint8Array(w * h), st = new Int32Array(w * h), out = [];
-    for (let p = 0; p < w * h; p++) {
-      if (!m[p] || seen[p]) continue;
-      let top = 0, n = 0, x0 = 1e9, y0 = 1e9, x1 = -1, y1 = -1; st[top++] = p; seen[p] = 1;
-      while (top) { const q = st[--top], qx = q % w, qy = (q / w) | 0; n++; if (qx < x0) x0 = qx; if (qx > x1) x1 = qx; if (qy < y0) y0 = qy; if (qy > y1) y1 = qy;
-        for (const r of [q - 1, q + 1, q - w, q + w]) { if (r < 0 || r >= w * h || seen[r] || !m[r]) continue; if ((r === q - 1 || r === q + 1) && ((r / w) | 0) !== qy) continue; seen[r] = 1; st[top++] = r; } }
-      if (n > 30) out.push({ x0: x0 + X0, y0: y0 + Y0, x1: x1 + X0, y1: y1 + Y0, n });
-    }
-    return out;
-  }
-  async function ocrBox(wk, cl, b, tall, psm) {
-    const bw = b.x1 - b.x0 + 1, bh = b.y1 - b.y0 + 1, k = tall / bh, pad = Math.round(tall * 0.25);
-    const c = document.createElement('canvas'); c.width = Math.round(bw * k) + 2 * pad; c.height = Math.round(bh * k) + 2 * pad;
-    const g = c.getContext('2d'); g.fillStyle = '#fff'; g.fillRect(0, 0, c.width, c.height); g.drawImage(cl, b.x0, b.y0, bw, bh, pad, pad, bw * k, bh * k);
-    await wk.setParameters({ tessedit_pageseg_mode: psm, tessedit_char_whitelist: '0123456789' });
-    const r = (await wk.recognize(c)).data; return { t: (r.text || '').replace(/\D/g, ''), conf: r.confidence || 0 };
-  }
-  // the strip along the top: "8936114080961   SC: FC0001007"
-  async function readTopLine(cl, wk) {
-    const W0 = cl.width, H0 = cl.height, y1 = Math.round(H0 * 0.22), x1 = Math.round(W0 * 0.72);
-    const outs = [];
-    for (const tall of [70, 50, 95]) {
-      const k = tall / y1, c = document.createElement('canvas'); c.width = Math.round(x1 * k) + 30; c.height = Math.round(y1 * k) + 30;
-      const g = c.getContext('2d'); g.fillStyle = '#fff'; g.fillRect(0, 0, c.width, c.height); g.drawImage(cl, 0, 0, x1, y1, 15, 15, x1 * k, y1 * k);
-      await wk.setParameters({ tessedit_pageseg_mode: '7', tessedit_char_whitelist: '0123456789SC:ABDEFGHJKLMNPRTUVWXYZ ' });
-      outs.push(((await wk.recognize(c)).data.text || '').trim());
-    }
-    await wk.setParameters({ tessedit_pageseg_mode: '11', tessedit_char_whitelist: '' });
-    return outs;
-  }
-  async function readPrice(cl, wk) {
-    const W0 = cl.width, H0 = cl.height, X0 = Math.round(W0 * 0.5);
-    const bl = blobs(cl, X0, Math.round(H0 * 0.12), W0, H0).filter((b) => b.x0 > X0 + 2 && b.x1 < W0 - 2);
-    if (!bl.length) return { price: '', raw: 'no shapes' };
-    const tall = Math.max(...bl.map((b) => b.y1 - b.y0));
-    if (tall < H0 * 0.35) return { price: '', raw: 'nothing big' };
-    const big = bl.filter((b) => b.y1 - b.y0 > tall * 0.8).sort((a, b) => a.x0 - b.x0);
-    const top = Math.min(...big.map((b) => b.y0)), bot = Math.max(...big.map((b) => b.y1)), right = Math.max(...big.map((b) => b.x1));
-    // cents: smaller digits just right of the big ones, sitting in their upper/middle part (the "." is tiny and ignored)
-    const cents = bl.filter((b) => b.x0 > right - 2 && b.x0 < right + tall * 1.2 && (b.y1 - b.y0) > tall * 0.18 && (b.y1 - b.y0) < tall * 0.7 && b.y0 < top + (bot - top) * 0.75).sort((a, b) => a.x0 - b.x0);
-    const unite = (arr) => ({ x0: Math.min(...arr.map((b) => b.x0)), y0: Math.min(...arr.map((b) => b.y0)), x1: Math.max(...arr.map((b) => b.x1)), y1: Math.max(...arr.map((b) => b.y1)) });
-    const pick = async (box, psm) => { const rs = []; for (const t of [80, 120, 56]) rs.push(await ocrBox(wk, cl, box, t, psm));
-      const v = {}; for (const r of rs) if (r.t) v[r.t] = (v[r.t] || 0) + 1 + r.conf / 100; return Object.keys(v).sort((a, b) => v[b] - v[a])[0] || ''; };
-    let dollars = '';
-    for (const b of big) { let d1 = ''; for (const psm of ['10', '8', '13', '7']) { d1 = (await pick(b, psm)).slice(0, 1); if (d1) break; } dollars += d1; }
-    let c2 = cents.length ? await pick(unite(cents.slice(0, 2)), '7') : '';
-    await wk.setParameters({ tessedit_pageseg_mode: '11', tessedit_char_whitelist: '' });
-    if (c2.length > 2) c2 = c2.slice(0, 2);
-    return { price: dollars ? (+dollars) + '.' + (c2.length === 2 ? c2 : '00') : '', raw: 'big ' + big.length + ' cents ' + cents.length + ' -> ' + dollars + '/' + c2 };
-  }
-  function eanOk(d) { if (!/^\d{13}$/.test(d)) return false; let t = 0; for (let i = 0; i < 12; i++) t += +d[i] * (i % 2 ? 3 : 1); return (10 - t % 10) % 10 === +d[12]; }
-  function eanFromText(text) {
-    const LOOK = { 0: '86', 1: '7', 3: '58', 5: '36', 6: '58', 8: '3609', 9: '8', 7: '1' };
-    for (const m of String(text).replace(/[OoD]/g, '0').replace(/[Il|]/g, '1').match(/\d{13}/g) || []) {
-      if (eanOk(m)) return m;
-      const fixes = [];
-      for (let i = 0; i < 13; i++) for (const ch of LOOK[m[i]] || '') { const t = m.slice(0, i) + ch + m.slice(i + 1); if (eanOk(t)) fixes.push(t); }
-      if (fixes.length === 1) return fixes[0];
-      const pref = fixes.find((t) => [...t].some((ch, i) => ch !== m[i] && ((m[i] === '5' && ch === '3') || (m[i] === '6' && ch === '8') || (m[i] === '3' && ch === '8'))));
-      if (pref) return pref;
-    }
-    return '';
-  }
-  const SIZE_RE = /^(.*?)[\s,]+(\d+(?:[.,]\d+)?\s*(?:g|kg|ml|l|lt|ltr|pk|pack|m|cm|mm|pc|pcs|ct|sheets|rolls?)|\d+\s*x\s*\d+\s*(?:g|ml)?)\s*$/i;
-  function fixSku(s) {
-    const m = String(s).toUpperCase().replace(/[^A-Z0-9]/g, '').match(/^([A-Z]{2})([0-9OIL|SB]{5,9})/);
-    if (!m) return '';
-    return m[1] + m[2].replace(/O/g, '0').replace(/[IL|]/g, '1').replace(/S/g, '5').replace(/B/g, '8');
-  }
-  function parse(data, cv) {
-    const w = cv.width, h = cv.height;
-    const words = (data.words || []).filter((x) => x.text && x.text.trim());
-    const all = words.map((x) => x.text).join(' ');
-    // SKU: the word after "SC", or anything shaped like FC0000501
-    let sku = '';
-    for (let i = 0; i < words.length; i++) {
-      const t = words[i].text.replace(/[^A-Za-z0-9:]/g, '');
-      if (/^S[CG0O]:?$/i.test(t) && words[i + 1]) { sku = fixSku(words[i + 1].text); if (sku) break; }
-      const m = t.match(/^S[CG]:?([A-Z]{2}[0-9OIl]{5,9})$/i); if (m) { sku = fixSku(m[1]); break; }
-    }
-    if (!sku) for (const x of words) { const mm = x.text.toUpperCase().replace(/[^A-Z0-9]/g, '').match(/([A-Z]{2}[0-9OIL]{6,8})$/); if (mm && x.bbox.y0 < h * 0.35) { const s2 = fixSku(mm[1]); if (/^[A-Z]{2}\d{6,8}$/.test(s2) && !/^S[CG]/.test(s2)) { sku = s2; break; } } }
-    if (!sku) for (const x of words) { const s = fixSku(x.text); if (s && /^[A-Z]{2}\d{5,9}$/.test(s) && !/^SC/.test(s) && x.bbox.y0 < h * 0.35) { sku = s; break; } }
-    // price: read by shapes (readPrice); the old way below is only a fallback
-    const syms = data.priceInfo && data.priceInfo.price ? [] : (data.symbols || []).filter((s) => /[0-9]/.test(s.text) && (s.bbox.x0 + s.bbox.x1) / 2 > w * 0.55 && s.bbox.y1 > h * 0.22);
-    let price = data.priceInfo ? data.priceInfo.price : '';
-    if (syms.length) {
-      const tall = Math.max(...syms.map((s) => s.bbox.y1 - s.bbox.y0));
-      const big = syms.filter((s) => s.bbox.y1 - s.bbox.y0 > tall * 0.75 && s.bbox.y1 - s.bbox.y0 > h * 0.4).sort((a, b) => a.bbox.x0 - b.bbox.x0);
-      const small = syms.filter((s) => s.bbox.y1 - s.bbox.y0 <= tall * 0.6 && big.length && s.bbox.x0 > big[big.length - 1].bbox.x0).sort((a, b) => a.bbox.x0 - b.bbox.x0);
-      const dollars = big.map((s) => s.text).join('');
-      const cents = small.map((s) => s.text).join('').slice(0, 2);
-      if (dollars && !price) price = dollars + '.' + (cents.length === 2 ? cents : '00');
-    }
-    // name: the lines on the left, under the barcode
-    const lines = (data.lines || []).filter((l) => (l.bbox.x0 + l.bbox.x1) / 2 < w * 0.62 && l.bbox.y0 > h * 0.38 && /[a-z]{2}/i.test(l.text))
-      .sort((a, b) => a.bbox.y0 - b.bbox.y0)
-      .map((l) => (l.words || []).filter((x) => (x.bbox.x0 + x.bbox.x1) / 2 < w * 0.62).map((x) => x.text).join(' ').replace(/\s+/g, ' ').trim()).filter(Boolean);
-    let name = lines.join(' ').replace(/[|_~«»“”"]/g, '').replace(/\s+/g, ' ').trim(), size = '';
-    name = name.replace(/(\s\d+\.\d{1,2})9$/, '$1g').replace(/(\s\d+)[\s,](\d{1,2})(g|kg|ml|l)$/i, '$1.$2$3').replace(/(\s\d+\.\d)9$/, '$1g').replace(/(\s\d+)9$/, (m0, n0) => (+n0 >= 10 ? n0 + 'g' : m0)).replace(/\bAlr\b/g, 'Air').replace(/(\d)\s+(g|kg|ml|pk)\b/gi, '$1$2');
-    const sm = name.match(SIZE_RE); if (sm) { name = sm[1].trim(); size = sm[2].replace(/\s+/g, '').replace(',', '.'); }
-    // top strip: SKU after "SC", and the barcode number (votes across the reads)
-    let ean2 = '';
-    if (data.topLine) {
-      const sk = {}, ea = {};
-      for (const t of data.topLine) {
-        const m = t.toUpperCase().replace(/\s+/g, ' ').match(/S?C\s*:?\s*([A-Z]{2})\s*([0-9OIL]{5,9})/) || t.toUpperCase().replace(/[^A-Z0-9]/g, '').match(/([A-Z]{2})([0-9]{6,8})$/);
-        if (m) { const v = fixSku(m[1] + m[2]); if (/^[A-Z]{2}\d{5,9}$/.test(v)) sk[v] = (sk[v] || 0) + 1; }
-        const e = eanFromText(t); if (e) ea[e] = (ea[e] || 0) + 1;
-      }
-      // only trust an answer that came out the same at least twice (a blank box is better than a wrong one)
-      if (sku) sk[sku] = (sk[sku] || 0) + 2;
-      const top = (o) => { const k2 = Object.keys(o).sort((a, b) => o[b] - o[a])[0]; return k2 && o[k2] >= 2 ? k2 : ''; };
-      sku = top(sk);
-      ean2 = top(ea);
-    }
-    return { sku, price, name, size, text: all, ean2, priceRaw: data.priceInfo ? data.priceInfo.raw : '' };
-  }
-  async function readShelfLabel(file, onStatus, pick) {
-    onStatus && onStatus('Finding the label…');
-    const img = await loadImage(file);
-    const labels = findLabels(img);
-    const out = { found: labels.length, barcode: '', sku: '', name: '', size: '', price: '' };
-    if (!labels.length) return out;
-    const c = labels[pick || 0] || labels[0];
-    let cv = cutLabel(img, c, false);
-    // the barcode is top-left on a right-way-up label; if it's on the right, the photo is upside down
-    let bc = readBarcode(cv) || readBarcode(clean(cutLabel(img, c, false)));
-    if (bc && bc.x > cv.width * 0.5) { cv = cutLabel(img, c, true); bc = { text: bc.text, x: cv.width - bc.x }; }
-    if (bc) out.barcode = bc.text;
-    onStatus && onStatus('Reading the label…');
-    const wk = await ocrWorker(onStatus);
-    const tryRead = async (canvas) => {
-      const cl = clean(canvas), data = (await wk.recognize(cl, {}, { blocks: true })).data;
-      // the price on its own: right-hand part, digits only, so the big number and the small raised cents both come through
-      data.priceInfo = await readPrice(cl, wk);
-      data.topLine = await readTopLine(cl, wk);
-      return parse(data, canvas);
-    };
-    // which way up: the barcode tells us if it could be read; otherwise read it and judge by what came out
-    const score = (q) => (q.sku ? 4 : 0) + (/^\d{1,3}\.\d{2}$/.test(q.price) ? 2 : 0) + ((q.name.match(/[A-Za-z]{3,}/g) || []).length >= 2 ? 3 : 0) + (q.size ? 1 : 0);
-    let r = await tryRead(cv);
-    if (!bc && score(r) < 7) { const cv2 = cutLabel(img, c, true); const r2 = await tryRead(cv2); if (score(r2) > score(r)) { r = r2; cv = cv2; } }
-    // no barcode read: use the printed number above it, if its check digit adds up (fixing one misread digit if that's all it takes)
-    if (!out.barcode) out.barcode = r.ean2 || eanFromText(r.text);
-    Object.assign(out, { sku: r.sku, name: r.name, size: r.size, price: r.price, text: r.text, priceRaw: r.priceRaw, w: cv.width, h: cv.height });
-    out.preview = cv.toDataURL('image/jpeg', 0.7);
-    return out;
-  }
-  root.ShelfLabel = { readShelfLabel, findLabels, cutLabel };
-})(window);
-</script>
 <script>
 (() => {
   const $ = (id) => document.getElementById(id);
@@ -2920,7 +2654,7 @@ var qrcode = function() {
     $('tkNote').textContent = tickets.length ? tickets.length + ' ticket' + (tickets.length === 1 ? '' : 's') : '';
     const qsTxt = (q) => { const p = ['a4', 'a5', 'a6'].filter((z) => q && +q[z]).map((z) => q[z] + '× ' + z.toUpperCase()); return p.length ? p.join(' · ') : '1× A6'; };
     const tName = (t) => t.it ? t.it.filter((x) => x.d).map((x) => x.d).join(' / ') : t.d + (t.z ? ' ' + t.z : '');
-    $('tkList').innerHTML = tickets.map((t, i) => '<div class="tk" data-t="' + i + '"><div class="info"><span class="chip">' + esc(t.y) + (t.l && t.l !== 'single' ? ' · ' + esc(LNAME[t.l] || '') : '') + '</span><span class="t1">' + esc(tName(t)) + '</span>' +
+    $('tkList').innerHTML = tickets.map((t, i) => '<div class="tk" data-t="' + i + '"><div class="info"><span class="chip">' + esc(t.y) + (t.it ? ' · ' + esc(LNAME[t.l] || '') : '') + '</span><span class="t1">' + esc(tName(t)) + '</span>' +
       '<span class="t2">' + esc((t.it ? t.it.filter((x) => x.p).map((x) => '$' + money(x.p)).join(' / ') : (t.m ? t.m + ' for ' : '') + '$' + money(t.p)) + ' · ' + qsTxt(t.q)) + '</span></div><button class="btn" data-edit>Edit</button><button class="rm" data-trm aria-label="Remove ' + esc(t.d) + '">×</button></div>').join('');
     $('list').innerHTML = prods ? items.map((x, i) =>
       '<div class="row' + (x.code === lastFresh ? ' fresh' : '') + '" data-i="' + i + '"><span class="code">' + x.code + '</span>' +
@@ -2956,8 +2690,8 @@ var qrcode = function() {
   ];
   let editing = -1, curType = 'Super Deal', mBarcode = '';
   // Bargain and Clearance come in several layouts (your editable tickets): one product, or 2 to 4 on one ticket
-  const LAYOUTS = { Bargain: ['single', 'landscape1', 'landscape', 'list2', 'list3', 'list4'], Clearance: ['single', 'list2', 'list3', 'list4'] };
-  const LNAME = { single: 'One product', landscape1: 'Landscape (1)', landscape: 'Landscape (2)', list2: 'List of 2', list3: 'List of 3', list4: 'List of 4' };
+  const LAYOUTS = { Bargain: ['single', 'landscape', 'list2', 'list3', 'list4'], Clearance: ['single', 'list2', 'list3', 'list4'] };
+  const LNAME = { single: 'One product', landscape: 'Landscape (2)', list2: 'List of 2', list3: 'List of 3', list4: 'List of 4' };
   const layN = (l) => (l === 'landscape' ? 2 : /^list(\d)$/.test(l || '') ? +l.slice(4) : 1);
   let curLayout = 'single', multi = [];   // multi: [{d, p, u, s, k}]
   function readMulti() {
@@ -3017,48 +2751,10 @@ var qrcode = function() {
     $('mBc').textContent = mBarcode ? 'Barcode ' + mBarcode + ' (SKU comes from the barcode list)' : 'Or scan the barcode and Ticket Finder fills the SKU in from the barcode list.';
     for (const z of ['a4', 'a5', 'a6']) $('q' + z).value = t.q && t.q[z] ? t.q[z] : '';
     $('mErr').textContent = ''; $('mSave2').textContent = editing >= 0 ? 'Save changes' : 'Add ticket';
-    $('selOut').hidden = true;
     $('mDelete').style.display = editing >= 0 ? '' : 'none';
     showType(); $('makeSheet').classList.add('show'); window.scrollTo(0, 0);
   }
   $('makeBtn').addEventListener('click', () => { wakeAudio(); openMake(); });
-
-  // ---------- read a shelf label (photo) into the form ----------
-  function loadTesseract() {
-    if (window.Tesseract) return Promise.resolve();
-    return new Promise((res, rej) => { const sc = document.createElement('script'); sc.src = './ocr/tesseract.min.js'; sc.onload = res; sc.onerror = () => rej(new Error('The text reader didn’t load. Open the app once with signal so it can save it.')); document.head.appendChild(sc); });
-  }
-  $('selBtn').addEventListener('click', () => { wakeAudio(); $('selCam').click(); });
-  $('selCam').addEventListener('change', async (e) => {
-    const f = e.target.files && e.target.files[0]; e.target.value = ''; if (!f) return;
-    const out = $('selOut'), msg = $('selMsg'); out.hidden = false; out.classList.remove('bad'); $('selImg').removeAttribute('src'); msg.textContent = 'Reading the label…';
-    $('selBtn').disabled = true;
-    try {
-      await loadTesseract();
-      const r = await ShelfLabel.readShelfLabel(f, (t) => { msg.textContent = t; });
-      if (!r.found) { out.classList.add('bad'); msg.textContent = 'Couldn’t find a yellow shelf label in that photo. Fill the photo with the label, hold it level, and try again.'; beep(false); return; }
-      if (r.preview) $('selImg').src = r.preview;
-      const nameSize = (r.name || '') + (r.size ? ' ' + r.size : '');
-      if (layN(curLayout) > 1) {   // a list or 2-up ticket: fill the next empty product
-        readMulti(); let i = multi.findIndex((m) => !m.d && !m.p); if (i < 0) i = 0;
-        multi[i] = { ...multi[i], d: nameSize || multi[i].d, p: r.price || multi[i].p, k: r.sku || multi[i].k };
-        drawMulti();
-      } else {
-        if (r.name) $('mName').value = r.name;
-        if (r.size) $('mSize').value = r.size;
-        if (r.price) $('mPrice').value = r.price;
-        if (r.sku) $('mSku').value = r.sku;
-        if (r.barcode) { mBarcode = r.barcode; $('mBc').textContent = 'Barcode ' + r.barcode + ' (from the shelf label)'; }
-      }
-      const got = [r.name && 'name', r.size && 'size', r.price && 'price $' + r.price, r.sku && 'SKU ' + r.sku, r.barcode && 'barcode'].filter(Boolean);
-      const miss = [!r.name && 'name', !r.price && 'price', !r.sku && 'SKU'].filter(Boolean);
-      msg.textContent = (got.length ? 'Filled in: ' + got.join(', ') + '. ' : '') + (miss.length ? 'Couldn’t read the ' + miss.join(' or ') + ': type ' + (miss.length > 1 ? 'them' : 'it') + ' in. ' : '') + 'Check it against the label above. The shelf price is the normal price, so change it if the ticket’s deal price is different.';
-      if (!got.length) out.classList.add('bad');
-      beep(!!got.length);
-    } catch (err) {
-      console.error(err); out.classList.add('bad'); msg.textContent = (err && err.message) || 'Couldn’t read that photo. Try again.'; beep(false);
-    } finally { $('selBtn').disabled = false; }
-  });
   $('makeClose').addEventListener('click', () => $('makeSheet').classList.remove('show'));
   $('mDelete').addEventListener('click', () => { if (editing < 0) return; tickets.splice(editing, 1); save(); render(); $('makeSheet').classList.remove('show'); setStatus('', 'Ticket removed.'); });
   $('mCam').addEventListener('change', async (e) => {
@@ -3094,7 +2790,6 @@ var qrcode = function() {
     const t = { id: editing >= 0 ? tickets[editing].id : Date.now().toString(36) + Math.random().toString(36).slice(2, 6), y: curType, d, z: $('mSize').value.trim(), p,
       m: T.qty ? m : '', e: T.each ? money($('mEach').value) : '', s: T.save ? money($('mSave').value) : '', x: $('mDetail').value.trim(),
       f: T.dates ? $('mFrom').value : '', o: T.dates ? $('mTo').value : '', k: $('mSku').value.trim().toUpperCase(), b: mBarcode, q };
-    if (curLayout !== 'single' && layN(curLayout) === 1) t.l = curLayout;
     for (const k of Object.keys(t)) if (t[k] === '' || (k === 'q' && !Object.keys(q).length)) delete t[k];
     if (editing >= 0) tickets[editing] = t; else tickets.unshift(t);
     save(); render(); $('makeSheet').classList.remove('show');
@@ -3200,26 +2895,13 @@ var qrcode = function() {
     return out;
   }
   const tfj = (o) => 'TFJ' + b32(JSON.stringify(o));
-  // squeezed version: about half as long, so the QR code is easier for the desk scanner to read and type
-  const canZip = typeof CompressionStream === 'function';
-  function b32b(bytes) { const A = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ234567'; let bits = 0, val = 0, out = ''; for (const b of bytes) { val = (val << 8) | b; bits += 8; while (bits >= 5) { out += A[(val >>> (bits - 5)) & 31]; bits -= 5; } val &= 255; } if (bits > 0) out += A[(val << (5 - bits)) & 31]; return out; }
-  async function tfz(o) {
-    if (!canZip) return tfj(o);
-    try {
-      const cs = new CompressionStream('deflate-raw');
-      const buf = await new Response(new Blob([new TextEncoder().encode(JSON.stringify(o))]).stream().pipeThrough(cs)).arrayBuffer();
-      return 'TFZ' + b32b(new Uint8Array(buf));
-    } catch (e) { return tfj(o); }
-  }
-  async function buildPages() {   // keep each QR code small enough to scan off a phone screen
-    if (!tickets.length) { const p = []; for (let i = 0; i < items.length; i += 40) p.push(payload(items.slice(i, i + 40))); return p; }
-    const MAX = 420, pages = []; let cur = { l: [], t: [] };
-    const tick = (t) => { const c = { ...t }; delete c.id; c.i = String(t.id || '').slice(-6); return c; };
-    for (const [kind, v] of tickets.map((t) => ['t', tick(t)]).concat(items.map((x) => ['l', [x.code, x.n]]))) {
-      const nx = { l: cur.l.slice(), t: cur.t.slice() }; nx[kind].push(v);
-      if ((cur.l.length || cur.t.length) && (await tfz(nx)).length > MAX) { pages.push(await tfz(cur)); cur = { l: [], t: [] }; cur[kind].push(v); } else cur = nx;
-    }
-    if (cur.l.length || cur.t.length) pages.push(await tfz(cur));
+  function buildPages() {   // keep each QR code small enough to scan off a phone screen
+    if (!tickets.length) { const p = []; for (let i = 0; i < items.length; i += PER_QR) p.push(payload(items.slice(i, i + PER_QR))); return p; }
+    const pages = []; let cur = { l: [], t: [] };
+    const push = (kind, v) => { const nx = { l: cur.l.slice(), t: cur.t.slice() }; nx[kind].push(v);
+      if ((cur.l.length || cur.t.length) && tfj(nx).length > 900) { pages.push(tfj(cur)); cur = { l: [], t: [] }; cur[kind].push(v); } else cur = nx; };
+    tickets.forEach((t) => push('t', t)); items.forEach((x) => push('l', [x.code, x.n]));
+    if (cur.l.length || cur.t.length) pages.push(tfj(cur));
     return pages;
   }
   function drawQR() {
@@ -3230,8 +2912,8 @@ var qrcode = function() {
     $('qrPage').textContent = 'QR ' + (qrIdx + 1) + ' of ' + qrPages.length;
     $('qrPrev').disabled = qrIdx === 0; $('qrNext').disabled = qrIdx === qrPages.length - 1;
   }
-  async function openSend() {
-    qrPages = await buildPages();
+  function openSend() {
+    qrPages = buildPages();
     qrIdx = 0; drawQR();
     const copies = items.reduce((a, x) => a + x.n, 0);
     const bits = [];
